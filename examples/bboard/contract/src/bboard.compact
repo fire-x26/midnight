@@ -9,12 +9,12 @@ export ledger message: Maybe<Opaque<"string">>;
 export ledger instance: Counter;
 export ledger poster: Bytes<32>;
 
-export ledger tokens: Map<Uint<64>, Maybe<Opaque<"string">>>;
+export ledger tokens: Map<Uint<64>, Opaque<"string">>;
 export ledger tokenCounter: Counter;
 
 export struct SoulboundToken {
   tokenId: Uint<64>;
-  metadata: Maybe<Opaque<"string">>;
+  metadata: Opaque<"string">;
 }
 
 constructor() {
@@ -23,8 +23,6 @@ constructor() {
     instance.increment(1);
 }
 
-1
-
 witness local_secret_key(): Bytes<32>;
 
 export circuit post(new_message: Opaque<"string">): [] {
@@ -32,11 +30,11 @@ export circuit post(new_message: Opaque<"string">): [] {
         "Attempted to post to an occupied board";
     poster = disclose(public_key(local_secret_key(), instance as Field as Bytes<32>));
     message = some<Opaque<"string">>(new_message);
-    tokenCounter.increment(1); // 从1开始计数
+    tokenCounter.increment(1); 
 
-    // tokens.insert(tokenCounter.read(), some<Opaque<"string">>(new_message));
+    tokens.insert(tokenCounter.read(), new_message);
 
-    state = STATE.occupied;
+    // state = STATE.occupied;
 }
 
 export circuit take_down(): Opaque<"string"> {
