@@ -1,0 +1,143 @@
+pragma language_version >= 0.14.0;
+
+import CompactStandardLibrary;
+
+// SBT代币结构
+export struct SoulboundToken {
+  tokenId: Uint<64>;
+  owner: Bytes<32>;
+  metadata: Opaque<"string">;
+  issuedAt: Uint<64>;
+}
+export struct SoulboundTokenLess {
+  tokenId: Uint<64>;
+  owner: Bytes<32>;
+  issuedAt: Uint<64>;
+}
+
+// 合约状态
+export ledger tokens: Map<Uint<64>, SoulboundToken>;
+export ledger tokensLess: Map<Uint<64>, SoulboundTokenLess>;
+export ledger tokensInfo: Map<Uint<64>, Maybe<Opaque<"string">>>;
+export ledger ownerTokens: Map<Bytes<32>, Set<Uint<64>>>;
+export ledger tokenCounter: Counter;
+export ledger currentTime: Counter; // 简化的时间戳
+
+constructor() {
+  tokenCounter.increment(0); // 从1开始计数
+  currentTime.increment(0); // 初始化时间戳
+}
+
+// 私有状态访问
+witness local_secret_key(): Bytes<32>;
+
+// 铸造新的SBT
+export circuit mint(metadata: Opaque<"string">): [Uint<64>] {
+  const sk = local_secret_key();
+  const owner = disclose(public_key(sk));
+  
+  const tokenId = tokenCounter.read();
+  tokenCounter.increment(1);
+  
+  // 创建新的SBT
+  const newToken = SoulboundTokenLess {
+    tokenId: tokenId,
+    owner: owner,
+    issuedAt: currentTime.read()
+  };
+  
+  // 更新状态
+  // tokens.insert(tokenId, newToken);
+  // tokensLess.insert(tokenId, newToken);
+  tokensInfo.insert(tokenId, some<Opaque<"string">>(metadata));
+  // // // 如果这是用户的第一个token，创建新集合
+  // if (!ownerTokens.member(owner)) {
+  //   ownerTokens.insert(owner, default<Set<Uint<64>>>);
+  // }
+  
+  // // 添加token到用户的集合
+  // ownerTokens.lookup(owner).insert(tokenId);
+  
+  // 更新时间计数器
+  currentTime.increment(1);
+  
+  return [tokenId];
+}
+
+// 验证SBT所有权
+export circuit verifyOwnership(tokenId: Uint<64>): [Boolean] {
+  // 尝试获取token，如果不存在则返回false
+  if (!tokens.member(tokenId)) {
+    return [false];
+  }
+  
+  const token = tokens.lookup(tokenId);
+  const sk = local_secret_key();
+  const ownerPubKey = disclose(public_key(sk));
+  
+  return [token.owner == ownerPubKey];
+}
+
+// 更新SBT元数据 (仅限所有者)
+export circuit updateMetadata(tokenId: Uint<64>, newMetadata: Opaque<"string">): [] {
+  assert tokens.member(tokenId)
+        "Token does not exist";
+  
+  const token = tokens.lookup(tokenId);
+  const sk = local_secret_key();
+  assert token.owner == disclose(public_key(sk))
+      "Not token owner";
+  
+  // 创建带有新元数据的SBT
+  const updatedToken = SoulboundToken {
+    tokenId: token.tokenId,
+    owner: token.owner,
+    metadata: newMetadata,
+    issuedAt: token.issuedAt
+  };
+  
+  // 更新状态
+  tokens.insert(tokenId, updatedToken);
+  
+  // 更新时间计数器
+  currentTime.increment(1);
+}
+
+// 撤销SBT (仅限所有者可以撤销自己的代币)
+export circuit revoke(tokenId: Uint<64>): [] {
+  assert tokens.member(tokenId)
+    "Token does not exist";
+  
+  const token = tokens.lookup(tokenId);
+  const sk = local_secret_key();
+  assert token.owner == disclose(public_key(sk))
+    "Not token owner";
+  
+  // 从所有者集合中移除
+  ownerTokens.lookup(token.owner).remove(tokenId);
+  
+  // 从总tokens中移除
+  tokens.remove(tokenId);
+  
+  // 更新时间计数器
+  currentTime.increment(1);
+}
+
+// 查看用户拥有的所有SBT
+export circuit getMyTokens(): [Uint<64>] {
+  const sk = local_secret_key();
+  const owner = disclose(public_key(sk));
+  
+  // 如果用户没有tokens，返回0
+  if (!ownerTokens.member(owner)) {
+    return [0];
+  }
+  
+  // 返回用户拥有的token数量
+  return [ownerTokens.lookup(owner).size()];
+}
+
+// 生成公钥
+export circuit public_key(sk: Bytes<32>): Bytes<32> {
+  return persistent_hash<Vector<2, Bytes<32>>>([pad(32, "sbt:owner:"), sk]);
+}
