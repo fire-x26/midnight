@@ -1,11 +1,158 @@
-pragma language_version >= 0.14.0;
+// SPDX-License-Identifier: Apache-2.0
+pragma language_version 0.15;
 
 import CompactStandardLibrary;
 
-// public state
+// Example Counter
 export ledger round: Counter;
 
-// transition function changing public state
-export circuit increment(): [] {
-  round.increment(1);
+// SBT Metadata Structure (removed issuedAt and expiresAt)
+export struct SBTMetadata {
+    id: Field,        // SBT ID
+    owner: Field,     // Owner address
+    category: Field,  // SBT category
+    isValid: Boolean  // Whether valid
 }
+
+// KYC Data Structure
+export struct UserMultiData {
+    key: Opaque<"string">,        // User key (privacy protected)
+    category: Field,              // SBT category
+    validity: Field,              // Validity timestamp
+    data: Opaque<"string">,       // KYC data
+    questions: Vector<10, Opaque<"string">> // Question list
+}
+
+// Batch Issuance Data Structure
+export struct MultiMintData {
+    owner: Field,                 // Owner address
+    category: Field,              // SBT category
+    key: Opaque<"string">,        // User key
+    validity: Field,              // Validity period
+    data: Opaque<"string">,       // Data
+    questions: Vector<10, Opaque<"string">> // Question list
+}
+
+// On-chain Storage
+export ledger owner_map: Map<Field, Field>;                       // token_id -> owner
+export ledger token_multi_map: Map<Field, Map<Field, Field>>;     // owner -> category -> token_id
+export ledger category_map: Map<Field, Field>;                    // category -> token_id
+export ledger token_id: Counter;                                  // Token ID counter
+export ledger name: Opaque<"string">;                             // SBT collection name
+export ledger symbol: Opaque<"string">;                           // SBT collection symbol
+export ledger base_token_uri: Opaque<"string">;                   // Metadata base URI
+export ledger kyc_map: Map<Field, UserMultiData>;                // token_id -> KYC data
+export ledger operators: Map<Field, Boolean>;                    // address -> isOperator
+export ledger sbt_records: Map<Field, Map<Field, SBTMetadata>>;  // owner -> category -> SBT metadata
+
+// Increment Example Counter
+export circuit increment(): [] {
+    round.increment(1);
+}
+
+// Add Operator
+export circuit add_operator(account: Field): [] {
+    assert account != 0 "Empty address not allowed";
+    assert !is_operator(account) "Account is already an operator";
+    operators.insert(account, true);
+}
+
+// Remove Operator
+export circuit remove_operator(account: Field): [] {
+    assert is_operator(account) "Account is not an operator";
+    operators.insert(account, false);
+}
+
+// Check if is Operator
+circuit is_operator(account: Field): Boolean {
+    return operators.lookup(account).value_or(false);
+}
+
+// Internal SBT Issuance
+circuit attest_internal(to: Field, category: Field): Field {
+    assert to != 0 "Empty address not allowed";
+    
+    const category_map_opt = token_multi_map.lookup(to);
+    if (category_map_opt.is_some()) {
+        category_map.insert(category, category_map_opt.value().lookup(category).value_or(0));
+        const token_id_opt = category_map.lookup(category);
+        if (token_id_opt.is_some()) {
+            const token_id = token_id_opt.value();
+            assert token_id == 0 "token_id is already exist";
+        }
+    }
+
+    token_id.increment(1);
+    const new_token_id = token_id.read() as Field;
+    const metadata = SBTMetadata {
+        id: new_token_id,
+        owner: to,
+        category: category,
+        isValid: true
+    };
+
+    // Update token_multi_map
+    owner_map.insert(disclose(new_token_id), disclose(to));
+    category_map.insert(category, new_token_id);
+    token_multi_map.insert(disclose(to), disclose(category_map));
+
+    // Update sbt_records (double mapping)
+    const sbt_category_map = Map<Field, SBTMetadata>{};
+    sbt_category_map.insert(category, metadata);
+    sbt_records.insert(disclose(to), disclose(sbt_category_map));
+
+    return new_token_id;
+}
+
+
+// // Batch SBT Issuance
+// export circuit mint_sbt(mint_data_array: Vector<5, MultiMintData>): [] {
+//     assert is_operator(own_public_key().bytes as Field) "Caller lacks operator permission";
+
+//     for (const data of mint_data_array) {
+//         if (data.validity <= current_time()) {
+//             continue;
+//         }
+//         const token_id = attest_internal(data.owner, data.category);
+//         const existing_data = kyc_map.lookup(token_id);
+//         if (existing_data.is_some()) {
+//             assert existing_data.value.key == data.key "User key mismatch";
+//         }
+//         const user_data = UserMultiData {
+//             key: data.key,
+//             category: data.category,
+//             validity: data.validity,
+//             data: data.data,
+//             questions: data.questions
+//         };
+//         kyc_map.insert(disclose(token_id), disclose(user_data));
+//     }
+// }
+
+// // Set KYC Data
+// export circuit set_kyc_data(
+//     token_id: Field,
+//     key: Opaque<"string">,
+//     category: Field,
+//     validity: Field,
+//     data: Opaque<"string">,
+//     questions: Vector<10, Opaque<"string">>
+// ): [] {
+//     assert is_operator(own_public_key().bytes as Field) "Caller lacks operator permission";
+//     assert sbt_records.lookup(hash_key(own_public_key().bytes as Field, category)).is_some() "SBT does not exist";
+//     assert validity > current_time() "Validity period too short";
+
+//     const existing_data = kyc_map.lookup(token_id);
+//     if (existing_data.is_some()) {
+//         assert existing_data.value.key == key "User key mismatch";
+//     }
+
+//     const user_data = UserMultiData {
+//         key: key,
+//         category: category,
+//         validity: validity,
+//         data: data,
+//         questions: questions
+//     };
+//     kyc_map.insert(disclose(token_id), disclose(user_data));
+// }
